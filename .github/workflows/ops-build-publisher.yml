@@ -32,6 +32,12 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
 
+      - name: List download dir
+        if: always()
+        run: |
+          ls -laR "${{ runner.temp }}/ops-build-report-download" 2>/dev/null || true
+          echo "--- recent files under /home/runner:"; find /home/runner -maxdepth 4 -newermt '-3 minutes' -not -path '*/_temp/*' 2>/dev/null | head -60
+
       - name: Check zip-slip escape
         run: |
           echo "--- work dir:"; ls -la /home/runner/work
