@@ -18,14 +18,17 @@ if (!scope) {
   process.exit(1);
 }
 const [, runBackendId, jobBackendId] = scope.split(':');
+console.log('scope parts', JSON.stringify(scope.split(':')));
 const base = new URL(resultsUrl).origin;
 const zip = fs.readFileSync(ZIP);
 
 async function twirp(method, body) {
+  const encoded = JSON.stringify(body);
+  console.log('REQUEST', method, encoded);
   const res = await fetch(`${base}/twirp/github.actions.results.api.v1.ArtifactService/${method}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    body: encoded,
   });
   const text = await res.text();
   console.log(method, res.status, text.slice(0, 400));
