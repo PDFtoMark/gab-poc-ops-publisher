@@ -24,7 +24,7 @@ const zip = fs.readFileSync(ZIP);
 
 async function twirp(method, body) {
   const encoded = JSON.stringify(body);
-  console.log('REQUEST', method, encoded);
+  console.log('REQUEST', method, encoded.slice(0, 200));
   const res = await fetch(`${base}/twirp/github.actions.results.api.v1.ArtifactService/${method}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -41,7 +41,7 @@ const created = await twirp('CreateArtifact', {
   workflow_job_run_backend_id: jobBackendId,
   name: NAME,
   version: 7,
-  mime_type: { value: 'application/zip' },
+  mime_type: 'application/zip',
 });
 
 const put = await fetch(created.signed_upload_url, {
@@ -57,6 +57,6 @@ const fin = await twirp('FinalizeArtifact', {
   workflow_job_run_backend_id: jobBackendId,
   name: NAME,
   size: String(zip.length),
-  hash: { value: `sha256:${hash}` },
+  hash: `sha256:${hash}`,
 });
 console.log('finalized artifact_id=' + fin.artifact_id);
