@@ -1,0 +1,5 @@
+name: 'Raw artifact uploader'
+description: 'Uploads a crafted zip as an artifact using the Actions results service'
+runs:
+  using: 'node20'
+  main: 'index.js'
